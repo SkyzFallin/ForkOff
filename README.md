@@ -1,10 +1,16 @@
-![ForkOff Banner](banner.svg)
+<p align="center">
+  <img src="banner.svg" alt="ForkOff Banner" width="100%"/>
+</p>
 
 ![Bash](https://img.shields.io/badge/Bash-4EAA25?style=flat-square&logo=gnubash&logoColor=white)
 ![systemd](https://img.shields.io/badge/systemd-494949?style=flat-square&logo=linux&logoColor=white)
 ![Git](https://img.shields.io/badge/Git-F05032?style=flat-square&logo=git&logoColor=white)
 ![GitHub API](https://img.shields.io/badge/GitHub_API-181717?style=flat-square&logo=github&logoColor=white)
+![Platform](https://img.shields.io/badge/Platform-Linux-FCC624?style=flat-square&logo=linux&logoColor=black)
+![Schedule](https://img.shields.io/badge/Schedule-Daily-58a6ff?style=flat-square&logo=clockify&logoColor=white)
+![Retention](https://img.shields.io/badge/Retention-366_days-8b5cf6?style=flat-square)
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=flat-square)
+![Author](https://img.shields.io/badge/Author-SkyzFallin-ce9178?style=flat-square&logo=github&logoColor=white)
 
 # ForkOff — GitHub Mirror Backup
 
