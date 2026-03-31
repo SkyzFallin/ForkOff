@@ -1,0 +1,15 @@
+[Unit]
+Description=ForkOff — GitHub Mirror Backup
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=@@INSTALL_PATH@@
+User=root
+Group=root
+EnvironmentFile=/etc/systemd/system/github-backup.service.d/token.env
+TimeoutStartSec=3600
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=github-backup
