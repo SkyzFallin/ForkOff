@@ -94,9 +94,10 @@ Press enter at any prompt to accept the default value.
 
 /etc/systemd/system/
 ├── github-backup.service      # Service unit
-├── github-backup.timer        # Daily timer
-└── github-backup.service.d/
-    └── token.env              # PAT (chmod 600, root-only)
+└── github-backup.timer        # Daily timer
+
+/etc/credstore/
+└── github-backup.github-token # Encrypted PAT (systemd-creds, root-only)
 ```
 
 ## Operations
@@ -204,14 +205,17 @@ git remote set-url origin git@github.com:YourUser/RepoName.git
 
 ## Token Management
 
-The PAT is stored in a systemd environment file (`chmod 600`, root-only). It is only loaded into memory when the backup service runs.
+The PAT is encrypted at rest using systemd's credential store (`systemd-creds`). It is decrypted by systemd at service startup and passed to the script via a runtime credentials directory — never written to disk in plain text.
 
 **Rotate token:**
 ```bash
-echo 'GITHUB_TOKEN=ghp_newtoken' | sudo tee /etc/systemd/system/github-backup.service.d/token.env > /dev/null
-sudo chmod 600 /etc/systemd/system/github-backup.service.d/token.env
-sudo systemctl daemon-reload
+echo -n 'ghp_newtoken' | sudo systemd-creds encrypt --name=github-token \
+    - /etc/credstore/github-backup.github-token
+sudo chmod 600 /etc/credstore/github-backup.github-token
+sudo chown root:root /etc/credstore/github-backup.github-token
 ```
+
+No daemon-reload or service restart needed — the credential is read fresh on each service invocation.
 
 ## No Versioned Snapshots
 
@@ -253,8 +257,8 @@ sudo systemctl stop github-backup.timer
 sudo systemctl disable github-backup.timer
 sudo rm /etc/systemd/system/github-backup.service
 sudo rm /etc/systemd/system/github-backup.timer
-sudo rm -rf /etc/systemd/system/github-backup.service.d
 sudo rm -rf /etc/github-backup
+sudo rm -f /etc/credstore/github-backup.github-token
 sudo rm /usr/local/bin/github-backup
 sudo systemctl daemon-reload
 # Optionally remove backup data:
