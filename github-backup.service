@@ -16,7 +16,7 @@ SyslogIdentifier=github-backup
 
 # Hardening — reduce attack surface
 ProtectSystem=strict
-ReadWritePaths=/opt/github-backups
+ReadWritePaths=@@BACKUP_BASE@@
 ReadOnlyPaths=/etc/github-backup
 ProtectHome=yes
 PrivateTmp=yes
