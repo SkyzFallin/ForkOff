@@ -205,10 +205,16 @@ EXISTING_RESTORE_TEST="false"
 
 if [[ -f "${CONFIG_DIR}/github-backup.conf" ]]; then
     RECONFIG=true
-    # Validate config ownership before sourcing (same check as backup script)
+    # Validate config ownership and permissions before sourcing (mirrors runtime script checks)
     if [[ "$(stat -c '%u' "${CONFIG_DIR}/github-backup.conf" 2>/dev/null)" != "0" ]]; then
         echo "ERROR: Existing config must be owned by root."
         echo "Fix with: sudo chown root:root ${CONFIG_DIR}/github-backup.conf"
+        exit 1
+    fi
+    config_perms=$(stat -c '%a' "${CONFIG_DIR}/github-backup.conf" 2>/dev/null)
+    if [[ "$config_perms" != "600" ]]; then
+        echo "ERROR: Existing config file must have mode 600: ${CONFIG_DIR}/github-backup.conf (found ${config_perms})"
+        echo "Fix with: sudo chmod 600 ${CONFIG_DIR}/github-backup.conf"
         exit 1
     fi
     # shellcheck source=/dev/null
@@ -542,7 +548,8 @@ chmod 600 "${CREDSTORE_DIR}/github-backup.github-token"
 chown root:root "${CREDSTORE_DIR}/github-backup.github-token"
 
 echo "[5/7] Installing systemd units..."
-sed "s|@@INSTALL_PATH@@|${INSTALL_PATH}|g" \
+sed -e "s|@@INSTALL_PATH@@|${INSTALL_PATH}|g" \
+    -e "s|@@BACKUP_BASE@@|${BACKUP_BASE}|g" \
     "${SCRIPT_DIR}/github-backup.service" > "${SYSTEMD_DIR}/github-backup.service"
 sed "s|@@SCHEDULE@@|${SCHEDULE}|g" \
     "${SCRIPT_DIR}/github-backup.timer" > "${SYSTEMD_DIR}/github-backup.timer"
