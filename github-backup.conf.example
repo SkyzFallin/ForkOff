@@ -3,6 +3,9 @@
 # =============================================================================
 # Installed to: /etc/github-backup/github-backup.conf
 # Do not put secrets here — the GitHub PAT is loaded via systemd EnvironmentFile.
+#
+# IMPORTANT: This file is sourced as bash. It must be owned by root with
+# mode 600 to prevent local privilege escalation.
 
 # GitHub username (owner whose repos to back up)
 GITHUB_USER="your-github-username"
@@ -15,9 +18,6 @@ LOG_DIR="/opt/github-backups/logs"
 
 # JSON audit report directory
 REPORT_DIR="/opt/github-backups/reports"
-
-# Lock file (prevents overlapping runs)
-LOCK_FILE="/tmp/github-backup.lock"
 
 # Days to keep logs and reports before auto-pruning
 MAX_LOG_DAYS=366

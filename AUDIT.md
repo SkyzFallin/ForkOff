@@ -1,6 +1,6 @@
 # AUDIT.md — ForkOff
 
-Last reviewed: 2026-03-30
+Last reviewed: 2026-03-31
 
 ---
 
@@ -8,20 +8,29 @@ Last reviewed: 2026-03-30
 
 - [x] ShellCheck clean (`github-backup.sh`, `install.sh`)
 - [x] `set -euo pipefail` enforced
-- [x] Lock file prevents overlapping runs
-- [x] Log rotation implemented (90-day default)
-- [x] JSON audit reports generated per run
+- [x] Lock directory prevents overlapping runs (atomic `mkdir`, no `/tmp` symlink risk)
+- [x] Log rotation implemented (366-day default)
+- [x] JSON audit reports generated per run (timestamped to avoid same-day overwrites)
+- [x] `shuf` dependency checked at startup
+- [x] Disk space pre-check before backup (requires >= 1 GB free)
+- [x] API rate limit handling with automatic backoff
 - [ ] Unit tests for fetch/mirror/verify functions
 - [ ] CI lint via GitHub Actions
 
 ## Security
 
 - [x] PAT stored in systemd env file (`chmod 600`, root-only)
-- [x] Token stripped from stored remote URLs after clone
+- [x] Token never appears in process arguments (`GIT_ASKPASS` pattern)
 - [x] No secrets in repo or backup directory
 - [x] Token injected at runtime only via `EnvironmentFile`
+- [x] Config file validated as root-owned before sourcing
+- [x] Config file permissions hardened (`chmod 600`, `root:root`)
+- [x] Backup directory permissions hardened (`chmod 700`)
+- [x] Lock uses atomic `mkdir` under backup dir (no `/tmp` symlink risk)
+- [x] No `eval` with user input (`printf -v` used instead)
+- [x] Home directory detection uses `getent` (no `eval echo ~`)
+- [x] Installer validates schedule input format (strict HH:MM)
 - [ ] PAT scoped as fine-grained (read-only, owner-only)
-- [ ] Backup directory permissions hardened (`chmod 700`)
 
 ## GitHub Repo
 
@@ -41,7 +50,6 @@ Last reviewed: 2026-03-30
 - [ ] Support for GitHub orgs (not just user repos)
 - [ ] Backup GitHub Issues/PRs/Releases via `gh api` export
 - [ ] Configurable backup frequency (not just daily)
-- [ ] Disk space check before cloning large repos
 - [ ] Summary dashboard (HTML report from JSON reports)
 - [ ] Support for GitLab/Bitbucket mirrors
 - [ ] Dry-run mode (`--dry-run`)
