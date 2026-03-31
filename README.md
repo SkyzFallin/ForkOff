@@ -55,7 +55,11 @@ The installer will walk you through:
 
 - Linux with systemd
 - `git`, `curl`, `jq` (installer will install these via apt if missing)
-- GitHub PAT with `repo` scope ([create one here](https://github.com/settings/tokens))
+- GitHub Personal Access Token (classic) with `repo` scope — [create one here](https://github.com/settings/tokens):
+  1. Click **Generate new token** → **Generate new token (classic)**
+  2. Give it a name (e.g. `forkoff-backup`)
+  3. Check the **`repo`** checkbox (full control of private repositories) — no other scopes needed
+  4. Click **Generate token** and copy it — you won't see it again
 
 ## Directory Structure
 
