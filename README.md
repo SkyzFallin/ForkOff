@@ -156,6 +156,10 @@ sudo chmod 600 /etc/systemd/system/github-backup.service.d/token.env
 sudo systemctl daemon-reload
 ```
 
+## No Encryption
+
+Backed-up mirrors are stored as plain git repos on disk — nothing is encrypted. This tool is meant to be simple and stay simple. If you have sensitive files in your repos, encrypt them yourself before pushing or use full-disk encryption on the backup volume.
+
 ## What Does NOT Get Backed Up
 
 Git mirrors cover all code, branches, tags, and history. These GitHub-only items require a separate export:
