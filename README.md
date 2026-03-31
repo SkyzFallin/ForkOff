@@ -1,3 +1,11 @@
+![ForkOff Banner](banner.svg)
+
+![Bash](https://img.shields.io/badge/Bash-4EAA25?style=flat-square&logo=gnubash&logoColor=white)
+![systemd](https://img.shields.io/badge/systemd-494949?style=flat-square&logo=linux&logoColor=white)
+![Git](https://img.shields.io/badge/Git-F05032?style=flat-square&logo=git&logoColor=white)
+![GitHub API](https://img.shields.io/badge/GitHub_API-181717?style=flat-square&logo=github&logoColor=white)
+![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=flat-square)
+
 # ForkOff — GitHub Mirror Backup
 
 By [SkyzFallin](https://github.com/SkyzFallin) | [GitHub Repo](https://github.com/SkyzFallin/ForkOff)
