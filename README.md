@@ -45,7 +45,7 @@ Under GitHub's [Terms of Service](https://docs.github.com/en/site-policy/github-
 ## Quick Start
 
 ```bash
-git clone https://github.com/YourUser/ForkOff.git
+git clone https://github.com/SkyzFallin/ForkOff.git
 cd ForkOff
 sudo bash install.sh
 ```
@@ -109,6 +109,8 @@ Press enter at any prompt to accept the default value.
 | Last backup report | `sudo github-backup --status` |
 | Verify all mirrors | `sudo github-backup --verify` |
 | Test restore | `sudo github-backup --test-restore` |
+| Test notifications | `sudo github-backup --test-notify` |
+| Show help | `github-backup --help` |
 | Restore a repo locally | `git clone /opt/github-backups/mirrors/RepoName.git` |
 
 ## Configuration
@@ -137,6 +139,32 @@ MAX_PARALLEL="4"               # Concurrent clone/update jobs
 MIN_FREE_MB="1024"             # Abort if less than this free
 RESTORE_TEST="false"           # Clone-from-mirror test after each run
 ```
+
+## Notifications
+
+ForkOff supports three independent notification channels. All are opt-in.
+
+**Webhook** (`WEBHOOK_URL`) — POSTs a JSON payload on failure. Set `WEBHOOK_ON_SUCCESS=true` to also fire on success. Payload format:
+
+```json
+{
+  "event": "backup_complete",
+  "status": "PARTIAL_FAILURE",
+  "user": "your-username",
+  "hostname": "backup-server",
+  "timestamp": "2026-03-31T03:15:00Z",
+  "total": 50,
+  "succeeded": 47,
+  "failed": 3,
+  "failed_repos": "repo1, repo2, repo3"
+}
+```
+
+**ntfy.sh** (`NTFY_TOPIC`) — sends push notifications on both success and failure. Priority 5 (high/urgent) on failure, priority 2 (low) on success.
+
+**Healthcheck** (`HEALTHCHECK_URL`) — pings the URL on success only. If the ping stops, your monitoring service (Healthchecks.io, UptimeRobot, etc.) alerts you. This is a dead-man's-switch: the absence of a ping signals failure.
+
+Test your setup with: `sudo github-backup --test-notify`
 
 ## Audit Trail / Proof of Backups
 
@@ -202,6 +230,21 @@ Backed-up mirrors are stored in cleartext as plain git repos on disk — there i
 Git mirrors are comprehensive for code — full history, every branch, every tag. When metadata export is enabled (`BACKUP_METADATA=true`), ForkOff also backs up issues, pull requests, and releases as JSON files.
 
 However, some GitHub-specific artifacts are still not covered: discussions, Actions run history, release binaries, webhooks, and deploy keys. For those, GitHub's built-in account export (Settings → Archives → Export account data) fills the gap.
+
+## Troubleshooting
+
+If a backup run reports failures, simply run it again — successful mirrors are updated incrementally and failed ones will be re-attempted. Check the log file for specific error messages:
+
+```bash
+sudo journalctl -u github-backup -n 50
+sudo github-backup --status
+```
+
+If the backup refuses to start with "Another backup is already running" but no backup is running, a previous run may have been killed. The script will auto-detect stale locks by checking if the recorded PID is still alive. If not, remove the lock manually:
+
+```bash
+sudo rm -rf /opt/github-backups/mirrors/.backup.lock
+```
 
 ## Uninstall
 
