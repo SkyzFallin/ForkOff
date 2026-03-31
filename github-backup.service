@@ -13,3 +13,18 @@ TimeoutStartSec=3600
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=github-backup
+
+# Hardening — reduce attack surface
+ProtectSystem=strict
+ReadWritePaths=/opt/github-backups /etc/github-backup
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictNamespaces=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
