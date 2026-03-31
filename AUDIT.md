@@ -39,7 +39,7 @@ Last reviewed: 2026-03-31
 - [x] PAT encrypted at rest via `systemd-creds` (`/etc/credstore/`, root-only)
 - [x] Token never appears in process arguments (`GIT_ASKPASS` for git, `-K` config file for curl)
 - [x] No secrets in repo or backup directory
-- [x] Token injected at runtime only via `LoadCredential` (decrypted by systemd)
+- [x] Token injected at runtime only via `LoadCredentialEncrypted` (decrypted by systemd)
 - [x] Config file validated as root-owned AND mode 600 before sourcing
 - [x] Backup directory permissions hardened (`chmod 700`)
 - [x] Lock uses atomic `mkdir` under backup dir (no `/tmp` symlink risk)
