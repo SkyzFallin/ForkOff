@@ -51,6 +51,8 @@ The installer will walk you through:
 5. Desktop error file path (optional)
 6. Daily backup time (default: 3:00 AM UTC)
 
+Press enter at any prompt to accept the default value.
+
 ## Requirements
 
 - Linux with systemd
