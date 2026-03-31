@@ -22,7 +22,7 @@ Under GitHub's [Terms of Service](https://docs.github.com/en/site-policy/github-
 - Interactive installer with TUI repo selector to exclude forks or repos you don't want
 - JSON audit reports per run (timestamps, pass/fail, repo count, sizes) — proof of backup for SLAs, compliance, and audits
 - Integrity spot-checks via `git fsck` on random mirrors each run
-- Timestamped logs retained for 90 days — verifiable backup history on demand
+- Timestamped logs retained for 366 days — over a full year of verifiable backup history
 - Optional desktop error notification file for visible alerting
 - Runs as a systemd timer — set it and forget it
 
@@ -90,7 +90,7 @@ BACKUP_DIR="/opt/github-backups/mirrors"
 LOG_DIR="/opt/github-backups/logs"
 REPORT_DIR="/opt/github-backups/reports"
 LOCK_FILE="/tmp/github-backup.lock"
-MAX_LOG_DAYS=90
+MAX_LOG_DAYS=366
 ERROR_FILE=""                    # Optional: /home/user/Desktop/BACKUP_ERROR.txt
 EXCLUDE_REPOS="some-fork another-repo"  # Space-separated repo names to skip
 ```
@@ -102,7 +102,7 @@ Every backup run produces two timestamped artifacts:
 - **Log file** (`logs/backup-YYYYMMDD-HHMMSS.log`) — full output of every clone/update operation
 - **JSON report** (`reports/backup-report-YYYYMMDD.json`) — structured summary with start/end times, hostname, pass/fail per repo, sizes, and branch counts
 
-These serve as verifiable proof that backups are running daily. Use them for compliance, client SLAs, or audits. Reports are retained for 90 days by default (configurable via `MAX_LOG_DAYS`).
+These serve as verifiable proof that backups are running daily. Use them for compliance, client SLAs, or audits. Reports are retained for 366 days by default (configurable via `MAX_LOG_DAYS`).
 
 Quick check:
 ```bash

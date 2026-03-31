@@ -20,7 +20,7 @@ REPORT_DIR="/opt/github-backups/reports"
 LOCK_FILE="/tmp/github-backup.lock"
 
 # Days to keep logs and reports before auto-pruning
-MAX_LOG_DAYS=90
+MAX_LOG_DAYS=366
 
 # Desktop error notification file (leave empty to disable)
 # If set, a file is created/appended here when backup errors occur.
