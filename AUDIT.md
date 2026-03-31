@@ -12,8 +12,12 @@ Last reviewed: 2026-03-31
 - [x] Log rotation implemented (366-day default)
 - [x] JSON audit reports generated per run (timestamped to avoid same-day overwrites)
 - [x] `shuf` dependency checked at startup
-- [x] Disk space pre-check before backup (requires >= 1 GB free)
+- [x] Disk space pre-check before backup (configurable via `MIN_FREE_MB`)
 - [x] API rate limit handling with automatic backoff
+- [x] Parallel cloning with FIFO semaphore (configurable via `MAX_PARALLEL`)
+- [x] Per-job log isolation prevents interleaving during parallel runs
+- [x] Post-clone ref validation (detects empty or corrupted mirrors)
+- [x] Restore test automation (`--test-restore` flag and `RESTORE_TEST` config)
 - [ ] Unit tests for fetch/mirror/verify functions
 - [ ] CI lint via GitHub Actions
 
@@ -30,6 +34,10 @@ Last reviewed: 2026-03-31
 - [x] No `eval` with user input (`printf -v` used instead)
 - [x] Home directory detection uses `getent` (no `eval echo ~`)
 - [x] Installer validates schedule input format (strict HH:MM)
+- [x] Parallel temp dir created via `mktemp -d` with mode 700
+- [x] JSON payloads built with `jq -nc` (no string interpolation)
+- [x] Webhook/ntfy/healthcheck failures logged but never abort backup
+- [x] Desktop error file feature removed (eliminated writes to user-controlled paths)
 - [ ] PAT scoped as fine-grained (read-only, owner-only)
 
 ## GitHub Repo
@@ -46,9 +54,9 @@ Last reviewed: 2026-03-31
 ## Feature Backlog
 
 - [ ] Fix systemd service execution (curl failing under systemd — debug in progress)
-- [ ] Email/webhook notification on backup failure
+- [x] Webhook/ntfy notification on backup failure
 - [ ] Support for GitHub orgs (not just user repos)
-- [ ] Backup GitHub Issues/PRs/Releases via `gh api` export
+- [x] Backup GitHub Issues/PRs/Releases via `gh api` export
 - [ ] Configurable backup frequency (not just daily)
 - [ ] Summary dashboard (HTML report from JSON reports)
 - [ ] Support for GitLab/Bitbucket mirrors
