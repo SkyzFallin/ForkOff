@@ -168,7 +168,14 @@ cleanup() {
         rm -rf "$LOCK_DIR" 2>/dev/null || true
     fi
     # Kill any remaining child processes from parallel jobs
-    kill 0 2>/dev/null || true
+    # Note: 'kill 0' sends SIGTERM to the entire process group including
+    # the script itself, which causes a SEGV during EXIT trap handling.
+    # Instead, kill only direct children of this process.
+    local child
+    for child in $(jobs -p 2>/dev/null); do
+        kill "$child" 2>/dev/null || true
+    done
+    wait 2>/dev/null || true
 }
 
 check_dependencies() {
