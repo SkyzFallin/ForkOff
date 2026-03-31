@@ -26,6 +26,12 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
     exit 1
 fi
 
+# Validate config file ownership before sourcing (must be root-owned)
+if [[ "$(stat -c '%u' "$CONFIG_FILE" 2>/dev/null)" != "0" ]]; then
+    echo "ERROR: Config file must be owned by root: $CONFIG_FILE"
+    exit 1
+fi
+
 # shellcheck source=/dev/null
 source "$CONFIG_FILE"
 
@@ -67,18 +73,34 @@ ERREOF
 }
 
 cleanup() {
-    rm -f "$LOCK_FILE"
+    cleanup_git_askpass
+    rmdir "$LOCK_DIR" 2>/dev/null || true
 }
 
 check_dependencies() {
     local missing=()
-    for cmd in git curl jq; do
+    for cmd in git curl jq shuf; do
         command -v "$cmd" &>/dev/null || missing+=("$cmd")
     done
     if [[ ${#missing[@]} -gt 0 ]]; then
         echo "ERROR: Missing required tools: ${missing[*]}"
         exit 1
     fi
+}
+
+setup_git_askpass() {
+    # Create a temporary script that prints the token for git authentication.
+    # This avoids embedding the token in clone/fetch URLs where it would be
+    # visible in /proc/*/cmdline to other local users.
+    GIT_ASKPASS_SCRIPT=$(mktemp "${TMPDIR:-/tmp}/git-askpass-XXXXXX")
+    chmod 700 "$GIT_ASKPASS_SCRIPT"
+    printf '#!/usr/bin/env bash\necho "${GITHUB_TOKEN}"\n' > "$GIT_ASKPASS_SCRIPT"
+    export GIT_ASKPASS="$GIT_ASKPASS_SCRIPT"
+    export GIT_TERMINAL_PROMPT=0
+}
+
+cleanup_git_askpass() {
+    [[ -n "${GIT_ASKPASS_SCRIPT:-}" ]] && rm -f "$GIT_ASKPASS_SCRIPT"
 }
 
 get_token() {
@@ -104,14 +126,32 @@ fetch_all_repos() {
     local all_repos=()
 
     while true; do
-        local response
-        response=$(curl -sf \
+        local response http_code header_file
+        header_file=$(mktemp)
+        response=$(curl -sf -D "$header_file" \
             -H "Authorization: token ${token}" \
             -H "Accept: application/vnd.github.v3+json" \
             "https://api.github.com/user/repos?per_page=100&page=${page}&affiliation=owner" 2>&1) || {
             log "ERROR" "GitHub API request failed (page ${page}): ${response}"
+            rm -f "$header_file"
             return 1
         }
+
+        # Respect GitHub API rate limits
+        local remaining
+        remaining=$(grep -i '^x-ratelimit-remaining:' "$header_file" | tr -d '\r' | awk '{print $2}')
+        if [[ -n "$remaining" && "$remaining" -le 1 ]]; then
+            local reset_epoch
+            reset_epoch=$(grep -i '^x-ratelimit-reset:' "$header_file" | tr -d '\r' | awk '{print $2}')
+            local now_epoch
+            now_epoch=$(date +%s)
+            local wait_secs=$(( reset_epoch - now_epoch + 2 ))
+            if [[ "$wait_secs" -gt 0 && "$wait_secs" -lt 3700 ]]; then
+                log "WARN" "API rate limit nearly exhausted. Sleeping ${wait_secs}s until reset..."
+                sleep "$wait_secs"
+            fi
+        fi
+        rm -f "$header_file"
 
         local count
         count=$(echo "$response" | jq 'length')
@@ -133,25 +173,21 @@ mirror_repo() {
     local token="$3"
     local repo_dir="${BACKUP_DIR}/${name}.git"
 
-    local auth_url="${clone_url/https:\/\//https:\/\/${token}@}"
-
     if [[ -d "$repo_dir" ]]; then
         log "INFO" "Updating mirror: ${name}"
-        cd "$repo_dir"
-        if git remote update --prune &>> "$LOG_FILE" 2>&1; then
+        # GIT_ASKPASS handles authentication — no token in URLs or process args
+        if (cd "$repo_dir" && git remote update --prune) &>> "$LOG_FILE" 2>&1; then
             log "INFO" "Updated: ${name}"
             return 0
         else
             log "WARN" "Update failed for ${name}, re-cloning..."
-            cd "$BACKUP_DIR"
             rm -rf "$repo_dir"
         fi
     fi
 
     log "INFO" "Cloning mirror: ${name}"
-    if git clone --mirror "$auth_url" "$repo_dir" &>> "$LOG_FILE" 2>&1; then
-        cd "$repo_dir"
-        git remote set-url origin "$clone_url"
+    # GIT_ASKPASS provides credentials — clone URL stays clean
+    if git clone --mirror "$clone_url" "$repo_dir" &>> "$LOG_FILE" 2>&1; then
         log "INFO" "Cloned: ${name}"
         return 0
     else
@@ -181,7 +217,7 @@ generate_report() {
     local end_time
     end_time=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 
-    local report_file="${REPORT_DIR}/backup-report-$(date '+%Y%m%d').json"
+    local report_file="${REPORT_DIR}/backup-report-$(date '+%Y%m%d-%H%M%S').json"
 
     local total_size
     total_size=$(du -sh "$BACKUP_DIR" 2>/dev/null | cut -f1)
@@ -282,18 +318,27 @@ esac
 # Pre-flight
 check_dependencies
 
-# Setup directories
+# Setup directories with secure permissions
 mkdir -p "$BACKUP_DIR" "$LOG_DIR" "$REPORT_DIR"
+chmod 700 "$BACKUP_DIR" "$LOG_DIR" "$REPORT_DIR"
+
+# Disk space pre-check (require at least 1 GB free)
+AVAIL_KB=$(df -Pk "$BACKUP_DIR" 2>/dev/null | awk 'NR==2 {print $4}')
+if [[ -n "$AVAIL_KB" && "$AVAIL_KB" -lt 1048576 ]]; then
+    log "ERROR" "Low disk space on ${BACKUP_DIR}: $(( AVAIL_KB / 1024 )) MB free (need >= 1 GB)"
+    desktop_error "Backup aborted — low disk space on ${BACKUP_DIR}: $(( AVAIL_KB / 1024 )) MB free."
+    exit 1
+fi
 
 # Log file for this run
 LOG_FILE="${LOG_DIR}/backup-$(date '+%Y%m%d-%H%M%S').log"
 
-# Lock to prevent overlapping runs
-if [[ -f "$LOCK_FILE" ]]; then
-    log "ERROR" "Another backup is already running (lock: $LOCK_FILE)"
+# Lock directory (atomic via mkdir — prevents race conditions and symlink attacks)
+LOCK_DIR="${BACKUP_DIR}/.backup.lock"
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] [ERROR] Another backup is already running (lock: $LOCK_DIR)" | tee -a "$LOG_FILE"
     exit 1
 fi
-echo $$ > "$LOCK_FILE"
 trap cleanup EXIT
 
 START_TIME=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
@@ -304,6 +349,9 @@ log "INFO" "Backup dir: ${BACKUP_DIR}"
 # Get token
 TOKEN=$(get_token)
 
+# Set up GIT_ASKPASS so tokens never appear in process arguments
+setup_git_askpass
+
 # Discover repos
 log "INFO" "Fetching repo list from GitHub API..."
 REPOS=$(fetch_all_repos "$TOKEN") || {
@@ -311,11 +359,15 @@ REPOS=$(fetch_all_repos "$TOKEN") || {
     desktop_error "API fetch failed — could not retrieve repo list from GitHub. Check token and network."
     exit 1
 }
-TOTAL_FETCHED=$(echo "$REPOS" | wc -l)
+if [[ -z "$REPOS" ]]; then
+    TOTAL_FETCHED=0
+else
+    TOTAL_FETCHED=$(echo "$REPOS" | grep -c . || true)
+fi
 log "INFO" "Found ${TOTAL_FETCHED} repositories from API"
 
 # Track existing mirrors for new repo detection
-EXISTING_MIRRORS=$(ls -d "$BACKUP_DIR"/*.git 2>/dev/null | xargs -I{} basename {} .git | sort || true)
+EXISTING_MIRRORS=$(find "$BACKUP_DIR" -maxdepth 1 -name '*.git' -type d -printf '%f\n' 2>/dev/null | sed 's/\.git$//' | sort || true)
 NEW_REPOS=0
 SUCCEEDED=0
 FAILED=0
@@ -355,7 +407,7 @@ TOTAL=$((SUCCEEDED + FAILED))
 
 # Post-backup integrity spot-check (random 3 repos)
 log "INFO" "Running integrity spot-check..."
-for dir in $(ls -d "$BACKUP_DIR"/*.git 2>/dev/null | shuf | head -3); do
+for dir in $(find "$BACKUP_DIR" -maxdepth 1 -name '*.git' -type d 2>/dev/null | shuf | head -3); do
     verify_mirror "$dir" || log "WARN" "Spot-check failed: $(basename "$dir" .git)"
 done
 

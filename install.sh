@@ -31,7 +31,7 @@ prompt_default() {
     local varname="$3"
     local input
     read -rp "${prompt} [${default}]: " input
-    eval "${varname}='${input:-$default}'"
+    printf -v "$varname" '%s' "${input:-$default}"
 }
 
 # --- TUI Repo Selector -------------------------------------------------------
@@ -187,7 +187,7 @@ if [[ -f "${CONFIG_DIR}/github-backup.conf" ]]; then
         EXISTING_TOKEN="${GITHUB_TOKEN:-}"
     fi
     # Clear sourced vars so they don't leak into prompts
-    unset GITHUB_USER BACKUP_DIR LOG_DIR REPORT_DIR LOCK_FILE MAX_LOG_DAYS ERROR_FILE EXCLUDE_REPOS GITHUB_TOKEN
+    unset GITHUB_USER BACKUP_DIR LOG_DIR REPORT_DIR MAX_LOG_DAYS ERROR_FILE EXCLUDE_REPOS GITHUB_TOKEN
 
     echo "  Existing installation detected — entering reconfigure mode."
     echo "  Press enter at any prompt to keep the current value."
@@ -271,7 +271,7 @@ while true; do
         "https://api.github.com/user/repos?per_page=100&page=${PAGE}&affiliation=owner" 2>/dev/null) || break
     NEXT_COUNT=$(echo "$NEXT_PAGE" | jq 'length')
     [[ "$NEXT_COUNT" -eq 0 ]] && break
-    ALL_REPO_DATA=$(echo "$ALL_REPO_DATA $NEXT_PAGE" | jq -s 'add')
+    ALL_REPO_DATA=$(printf '%s\n%s' "$ALL_REPO_DATA" "$NEXT_PAGE" | jq -s 'add')
     ((PAGE++)) || true
 done
 
@@ -354,7 +354,8 @@ echo ""
 # --- Prompt for desktop error file (optional) ---
 # Detect the real user's home (not root) for a sensible default
 REAL_USER="${SUDO_USER:-$USER}"
-REAL_HOME=$(eval echo "~${REAL_USER}")
+REAL_HOME=$(getent passwd "$REAL_USER" 2>/dev/null | cut -d: -f6)
+REAL_HOME="${REAL_HOME:-$HOME}"
 if [[ "$RECONFIG" == true && -n "$EXISTING_ERROR_FILE" ]]; then
     DEFAULT_ERROR_FILE="$EXISTING_ERROR_FILE"
 elif [[ -d "${REAL_HOME}/Desktop" ]]; then
@@ -397,6 +398,10 @@ echo ""
 # --- Prompt for schedule ---
 SCHEDULE_DEFAULT="${EXISTING_SCHEDULE:-03:00}"
 prompt_default "Daily backup time (UTC, 24h format)" "$SCHEDULE_DEFAULT" SCHEDULE_TIME
+if ! [[ "$SCHEDULE_TIME" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; then
+    echo "ERROR: Invalid time format. Use HH:MM in 24-hour UTC format (example: 03:00)."
+    exit 1
+fi
 SCHEDULE="*-*-* ${SCHEDULE_TIME}:00"
 echo ""
 
@@ -411,7 +416,7 @@ echo ""
 echo "  GitHub user:     ${GITHUB_USER}"
 echo "  Backup dir:      ${BACKUP_BASE}/"
 echo "  Install path:    ${INSTALL_PATH}"
-echo "  Schedule:        ${SCHEDULE} UTC"
+echo "  Schedule:        ${SCHEDULE} UTC (+ up to 15min jitter)"
 echo "  Excluded repos:  ${EXCLUDE_REPOS:-none}"
 echo "  Error file:      ${ERROR_FILE:-disabled}"
 echo ""
@@ -433,12 +438,12 @@ GITHUB_USER="${GITHUB_USER}"
 BACKUP_DIR="${BACKUP_DIR}"
 LOG_DIR="${LOG_DIR}"
 REPORT_DIR="${REPORT_DIR}"
-LOCK_FILE="/tmp/github-backup.lock"
 MAX_LOG_DAYS=366
 ERROR_FILE="${ERROR_FILE}"
 EXCLUDE_REPOS="${EXCLUDE_REPOS}"
 CONFEOF
-chmod 644 "${CONFIG_DIR}/github-backup.conf"
+chmod 600 "${CONFIG_DIR}/github-backup.conf"
+chown root:root "${CONFIG_DIR}/github-backup.conf"
 
 echo "[3/7] Installing backup script to ${INSTALL_PATH}..."
 cp "${SCRIPT_DIR}/github-backup.sh" "$INSTALL_PATH"
