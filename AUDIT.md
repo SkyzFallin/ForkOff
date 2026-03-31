@@ -26,7 +26,7 @@ Last reviewed: 2026-03-31
 - [x] `--test-notify` flag for notification channel testing
 - [x] Elapsed time shown in backup summary
 - [x] Git network timeouts (`GIT_HTTP_LOW_SPEED_LIMIT/TIME`) prevent hung clones
-- [x] `MAX_PARALLEL` and `MIN_FREE_MB` validated as positive integers
+- [x] `MAX_PARALLEL`, `MIN_FREE_MB`, and `MAX_LOG_DAYS` validated as positive integers
 - [x] `gh api --paginate` output merged via `jq -s 'add'` for valid JSON
 - [x] Metadata export bounded by `timeout 300`
 - [x] API calls retry on transient failure (`--retry 3 --retry-delay 5`)
@@ -36,18 +36,18 @@ Last reviewed: 2026-03-31
 
 ## Security
 
-- [x] PAT stored in systemd env file (`chmod 600`, root-only)
+- [x] PAT encrypted at rest via `systemd-creds` (`/etc/credstore/`, root-only)
 - [x] Token never appears in process arguments (`GIT_ASKPASS` for git, `-K` config file for curl)
 - [x] No secrets in repo or backup directory
-- [x] Token injected at runtime only via `EnvironmentFile`
+- [x] Token injected at runtime only via `LoadCredential` (decrypted by systemd)
 - [x] Config file validated as root-owned AND mode 600 before sourcing
 - [x] Backup directory permissions hardened (`chmod 700`)
 - [x] Lock uses atomic `mkdir` under backup dir (no `/tmp` symlink risk)
 - [x] No `eval` with user input (`printf -v` used instead)
 - [x] Installer validates schedule input format (strict HH:MM, retry loop)
 - [x] Config values escaped with `printf %q` during generation (prevents shell injection)
-- [x] Installer sources token.env via `grep` extraction (no `source` code execution)
-- [x] Installer validates config ownership before sourcing
+- [x] Installer reads existing token via `systemd-creds decrypt` (no plaintext storage)
+- [x] Installer validates config ownership and mode 600 before sourcing
 - [x] Parallel temp dir and askpass script created under BACKUP_DIR (mode 700, not `/tmp`)
 - [x] JSON payloads built with `jq -nc` (no string interpolation)
 - [x] Webhook/ntfy/healthcheck failures logged but never abort backup
