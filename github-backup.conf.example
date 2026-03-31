@@ -22,10 +22,47 @@ REPORT_DIR="/opt/github-backups/reports"
 # Days to keep logs and reports before auto-pruning
 MAX_LOG_DAYS=366
 
-# Desktop error notification file (leave empty to disable)
-# If set, a file is created/appended here when backup errors occur.
-# Useful if you RDP/VNC into the box and want a visible flag on the desktop.
-ERROR_FILE=""
-
 # Space-separated list of repo names to skip (e.g. forks you don't own)
 EXCLUDE_REPOS=""
+
+# --- Notifications ---
+
+# Webhook URL — POST JSON payload on backup failure (and optionally success).
+# Works with Discord, Slack, ntfy.sh webhooks, Make, Zapier, etc.
+# Leave empty to disable.
+WEBHOOK_URL=""
+
+# Also send webhook on successful backups (true/false, default false)
+WEBHOOK_ON_SUCCESS="false"
+
+# ntfy.sh topic URL (e.g. "https://ntfy.sh/my-backups")
+# Independent from webhook — both can be enabled simultaneously.
+# Leave empty to disable.
+NTFY_TOPIC=""
+
+# Healthcheck ping URL — GET request sent after each successful backup.
+# Works with Healthchecks.io, UptimeRobot, etc.
+# Not pinged on failure (monitoring service detects the missing ping).
+# Leave empty to disable.
+HEALTHCHECK_URL=""
+
+# --- Metadata Export ---
+
+# Export GitHub issues, PRs, and releases as JSON alongside mirrors (true/false).
+# Requires the gh CLI to be installed and authenticated.
+# Stored in BACKUP_DIR/../metadata/<repo>/
+BACKUP_METADATA="false"
+
+# --- Performance ---
+
+# Maximum parallel clone/update jobs (default 4)
+MAX_PARALLEL="4"
+
+# --- Safety ---
+
+# Minimum free disk space in MB before aborting (default 1024 = 1 GB)
+MIN_FREE_MB="1024"
+
+# Run a restore test after each backup (true/false).
+# Picks a random mirror, clones to temp dir, verifies HEAD, cleans up.
+RESTORE_TEST="false"
