@@ -2,7 +2,8 @@
 # ForkOff — Configuration
 # =============================================================================
 # Installed to: /etc/github-backup/github-backup.conf
-# Do not put secrets here — the GitHub PAT is loaded via systemd EnvironmentFile.
+# Do not put secrets here — the GitHub PAT is encrypted via systemd-creds
+# and loaded at runtime through LoadCredential.
 #
 # IMPORTANT: This file is sourced as bash. It must be owned by root with
 # mode 600 to prevent local privilege escalation.
