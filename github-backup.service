@@ -8,7 +8,7 @@ Type=oneshot
 ExecStart=@@INSTALL_PATH@@
 User=root
 Group=root
-EnvironmentFile=/etc/systemd/system/github-backup.service.d/token.env
+LoadCredential=github-token:/etc/credstore/github-backup.github-token
 TimeoutStartSec=3600
 StandardOutput=journal
 StandardError=journal
@@ -16,7 +16,8 @@ SyslogIdentifier=github-backup
 
 # Hardening — reduce attack surface
 ProtectSystem=strict
-ReadWritePaths=/opt/github-backups /etc/github-backup
+ReadWritePaths=/opt/github-backups
+ReadOnlyPaths=/etc/github-backup
 ProtectHome=yes
 PrivateTmp=yes
 NoNewPrivileges=yes
