@@ -14,9 +14,16 @@
 #   github-backup --status       # Show last backup report
 #   github-backup --verify       # Verify all mirror integrity
 #   github-backup --test-restore # Clone a random mirror and verify HEAD
+#   github-backup --test-notify  # Send test notification to all channels
+#   github-backup --help         # Show this help
+#
+# Environment:
+#   GITHUB_BACKUP_CONF=/path/to/alt.conf   Override config file location
+#   GITHUB_TOKEN=ghp_...                   Token (normally from systemd)
 # =============================================================================
 
 set -euo pipefail
+umask 077
 
 # --- Load Configuration ------------------------------------------------------
 CONFIG_FILE="${GITHUB_BACKUP_CONF:-/etc/github-backup/github-backup.conf}"
@@ -27,9 +34,17 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
     exit 1
 fi
 
-# Validate config file ownership before sourcing (must be root-owned)
+# Validate config file ownership and permissions before sourcing
 if [[ "$(stat -c '%u' "$CONFIG_FILE" 2>/dev/null)" != "0" ]]; then
     echo "ERROR: Config file must be owned by root: $CONFIG_FILE"
+    echo "Fix with: sudo chown root:root $CONFIG_FILE"
+    exit 1
+fi
+
+config_perms=$(stat -c '%a' "$CONFIG_FILE" 2>/dev/null)
+if [[ "$config_perms" != "600" ]]; then
+    echo "ERROR: Config file must have mode 600: $CONFIG_FILE (found ${config_perms})"
+    echo "Fix with: sudo chmod 600 $CONFIG_FILE"
     exit 1
 fi
 
@@ -49,6 +64,14 @@ MAX_PARALLEL="${MAX_PARALLEL:-4}"
 MIN_FREE_MB="${MIN_FREE_MB:-1024}"
 RESTORE_TEST="${RESTORE_TEST:-false}"
 
+# Validate numeric config values
+[[ "$MAX_PARALLEL" =~ ^[1-9][0-9]*$ ]] || MAX_PARALLEL=4
+[[ "$MIN_FREE_MB" =~ ^[0-9]+$ ]] || MIN_FREE_MB=1024
+
+# Git network timeouts — prevent hung clones from blocking semaphore slots
+export GIT_HTTP_LOW_SPEED_LIMIT=1000   # bytes/sec
+export GIT_HTTP_LOW_SPEED_TIME=60      # abort if below limit for this many seconds
+
 # --- Functions ---------------------------------------------------------------
 
 log() {
@@ -58,6 +81,7 @@ log() {
 
 # --- Notification functions ---
 # Each guards on its own config key and never aborts the backup on failure.
+# curl headers are passed via a temp config file to avoid leaking values in /proc/cmdline.
 
 send_webhook() {
     [[ -n "$WEBHOOK_URL" ]] || return 0
@@ -139,7 +163,11 @@ cleanup() {
     if [[ -n "${PARALLEL_TMPDIR:-}" ]]; then
         rm -rf "$PARALLEL_TMPDIR" 2>/dev/null || true
     fi
-    rmdir "$LOCK_DIR" 2>/dev/null || true
+    if [[ -n "${LOCK_DIR:-}" ]]; then
+        rm -rf "$LOCK_DIR" 2>/dev/null || true
+    fi
+    # Kill any remaining child processes from parallel jobs
+    kill 0 2>/dev/null || true
 }
 
 check_dependencies() {
@@ -148,10 +176,17 @@ check_dependencies() {
         command -v "$cmd" &>/dev/null || missing+=("$cmd")
     done
     if [[ "$BACKUP_METADATA" == "true" ]]; then
-        command -v gh &>/dev/null || missing+=("gh (required for BACKUP_METADATA)")
+        if ! command -v gh &>/dev/null; then
+            missing+=("gh (required for BACKUP_METADATA)")
+        elif ! gh auth status &>/dev/null; then
+            echo "ERROR: gh CLI is installed but not authenticated."
+            echo "Run: gh auth login"
+            exit 1
+        fi
     fi
     if [[ ${#missing[@]} -gt 0 ]]; then
         echo "ERROR: Missing required tools: ${missing[*]}"
+        echo "Install with: sudo apt-get install <package>"
         exit 1
     fi
 }
@@ -160,7 +195,8 @@ setup_git_askpass() {
     # Create a temporary script that prints the token for git authentication.
     # This avoids embedding the token in clone/fetch URLs where it would be
     # visible in /proc/*/cmdline to other local users.
-    GIT_ASKPASS_SCRIPT=$(mktemp "${TMPDIR:-/tmp}/git-askpass-XXXXXX")
+    # Created under BACKUP_DIR (mode 700) rather than /tmp for defense in depth.
+    GIT_ASKPASS_SCRIPT=$(mktemp "${BACKUP_DIR}/.git-askpass-XXXXXX")
     chmod 700 "$GIT_ASKPASS_SCRIPT"
     printf '#!/usr/bin/env bash\necho "${GITHUB_TOKEN}"\n' > "$GIT_ASKPASS_SCRIPT"
     export GIT_ASKPASS="$GIT_ASKPASS_SCRIPT"
@@ -174,10 +210,24 @@ cleanup_git_askpass() {
 get_token() {
     if [[ -z "${GITHUB_TOKEN:-}" ]]; then
         log "ERROR" "GITHUB_TOKEN environment variable is not set."
-        log "ERROR" "Ensure the systemd EnvironmentFile is configured."
+        log "ERROR" "Set it with: export GITHUB_TOKEN=ghp_... or ensure the systemd EnvironmentFile is configured."
         exit 1
     fi
     echo "$GITHUB_TOKEN"
+}
+
+# Authenticate curl to the GitHub API without exposing the token in process args.
+# Writes a curl config file with the auth header and passes it via -K.
+gh_curl() {
+    local token="$1"; shift
+    local curl_cfg
+    curl_cfg=$(mktemp "${BACKUP_DIR}/.curl-cfg-XXXXXX")
+    chmod 600 "$curl_cfg"
+    printf -- '-H "Authorization: token %s"\n' "$token" > "$curl_cfg"
+    curl -sf -K "$curl_cfg" "$@"
+    local rc=$?
+    rm -f "$curl_cfg"
+    return $rc
 }
 
 is_excluded() {
@@ -196,9 +246,9 @@ fetch_all_repos() {
     while true; do
         local response header_file
         header_file=$(mktemp)
-        response=$(curl -sf -D "$header_file" \
-            -H "Authorization: token ${token}" \
+        response=$(gh_curl "$token" -D "$header_file" \
             -H "Accept: application/vnd.github.v3+json" \
+            --retry 3 --retry-delay 5 \
             "https://api.github.com/user/repos?per_page=100&page=${page}&affiliation=owner" 2>&1) || {
             log "ERROR" "GitHub API request failed (page ${page}): ${response}"
             rm -f "$header_file"
@@ -211,10 +261,12 @@ fetch_all_repos() {
         if [[ -n "$remaining" && "$remaining" -le 1 ]]; then
             local reset_epoch
             reset_epoch=$(grep -i '^x-ratelimit-reset:' "$header_file" | tr -d '\r' | awk '{print $2}')
+            # Fallback if reset header is missing
+            [[ -n "$reset_epoch" ]] || reset_epoch=$(( $(date +%s) + 60 ))
             local now_epoch
             now_epoch=$(date +%s)
             local wait_secs=$(( reset_epoch - now_epoch + 2 ))
-            if [[ "$wait_secs" -gt 0 && "$wait_secs" -lt 3700 ]]; then
+            if [[ "$wait_secs" -gt 0 && "$wait_secs" -lt 900 ]]; then
                 log "WARN" "API rate limit nearly exhausted. Sleeping ${wait_secs}s until reset..."
                 sleep "$wait_secs"
             fi
@@ -222,10 +274,23 @@ fetch_all_repos() {
         rm -f "$header_file"
 
         local count
-        count=$(echo "$response" | jq 'length')
+        count=$(echo "$response" | jq 'length' 2>/dev/null) || {
+            log "ERROR" "Malformed API response on page ${page}"
+            return 1
+        }
         [[ "$count" -eq 0 ]] && break
 
         while IFS='|' read -r name clone_url private; do
+            # Validate repo name — reject anything that could cause path traversal
+            if [[ ! "$name" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+                log "ERROR" "Invalid repo name rejected: ${name}"
+                continue
+            fi
+            # Validate clone URL — must be HTTPS GitHub
+            if [[ ! "$clone_url" =~ ^https://github\.com/ ]]; then
+                log "ERROR" "Rejected non-GitHub clone URL for ${name}: ${clone_url}"
+                continue
+            fi
             all_repos+=("${name}|${clone_url}|${private}")
         done < <(echo "$response" | jq -r '.[] | "\(.name)|\(.clone_url)|\(.private)"')
 
@@ -243,7 +308,7 @@ mirror_repo() {
     if [[ -d "$repo_dir" ]]; then
         log "INFO" "Updating mirror: ${name}"
         # GIT_ASKPASS handles authentication — no token in URLs or process args
-        if (cd "$repo_dir" && git remote update --prune) &>> "$LOG_FILE" 2>&1; then
+        if (cd "$repo_dir" && git remote update --prune) &>> "$LOG_FILE"; then
             log "INFO" "Updated: ${name}"
             return 0
         else
@@ -254,11 +319,13 @@ mirror_repo() {
 
     log "INFO" "Cloning mirror: ${name}"
     # GIT_ASKPASS provides credentials — clone URL stays clean
-    if git clone --mirror "$clone_url" "$repo_dir" &>> "$LOG_FILE" 2>&1; then
+    if git clone --mirror "$clone_url" "$repo_dir" &>> "$LOG_FILE"; then
         log "INFO" "Cloned: ${name}"
         return 0
     else
         log "ERROR" "Failed to clone: ${name}"
+        # Clean up partial clone
+        rm -rf "$repo_dir"
         return 1
     fi
 }
@@ -295,8 +362,9 @@ export_metadata() {
     local issues=0 pulls=0 releases=0
 
     # Issues (includes both open and closed)
-    if gh api --paginate "repos/${GITHUB_USER}/${name}/issues?state=all&per_page=100" \
-        2>/dev/null > "${meta_dir}/issues.json"; then
+    # gh api --paginate outputs one JSON array per page — merge with jq -s 'add'
+    if timeout 300 gh api --paginate "repos/${GITHUB_USER}/${name}/issues?state=all&per_page=100" \
+        2>/dev/null | jq -s 'add // []' > "${meta_dir}/issues.json"; then
         issues=$(jq 'length' "${meta_dir}/issues.json" 2>/dev/null || echo 0)
     else
         echo '[]' > "${meta_dir}/issues.json"
@@ -304,8 +372,8 @@ export_metadata() {
     fi
 
     # Pull requests (includes both open and closed)
-    if gh api --paginate "repos/${GITHUB_USER}/${name}/pulls?state=all&per_page=100" \
-        2>/dev/null > "${meta_dir}/pulls.json"; then
+    if timeout 300 gh api --paginate "repos/${GITHUB_USER}/${name}/pulls?state=all&per_page=100" \
+        2>/dev/null | jq -s 'add // []' > "${meta_dir}/pulls.json"; then
         pulls=$(jq 'length' "${meta_dir}/pulls.json" 2>/dev/null || echo 0)
     else
         echo '[]' > "${meta_dir}/pulls.json"
@@ -313,8 +381,8 @@ export_metadata() {
     fi
 
     # Releases
-    if gh api --paginate "repos/${GITHUB_USER}/${name}/releases?per_page=100" \
-        2>/dev/null > "${meta_dir}/releases.json"; then
+    if timeout 300 gh api --paginate "repos/${GITHUB_USER}/${name}/releases?per_page=100" \
+        2>/dev/null | jq -s 'add // []' > "${meta_dir}/releases.json"; then
         releases=$(jq 'length' "${meta_dir}/releases.json" 2>/dev/null || echo 0)
     else
         echo '[]' > "${meta_dir}/releases.json"
@@ -360,6 +428,14 @@ test_restore() {
     fi
 }
 
+test_notify() {
+    echo "Sending test notifications to all configured channels..."
+    send_webhook "TEST" 0 0 0 ""
+    send_ntfy "SUCCESS" "ForkOff test notification — if you see this, notifications are working."
+    ping_healthcheck
+    echo "Done. Check your webhook, ntfy, and healthcheck endpoints."
+}
+
 generate_report() {
     local start_time="$1"
     local total="$2"
@@ -370,7 +446,7 @@ generate_report() {
     end_time=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 
     local report_file
-    report_file="${REPORT_DIR}/backup-report-$(date '+%Y%m%d-%H%M%S').json"
+    report_file="${REPORT_DIR}/backup-report-$(date -u '+%Y%m%d-%H%M%SZ').json"
 
     local total_size
     total_size=$(du -sh "$BACKUP_DIR" 2>/dev/null | cut -f1)
@@ -386,7 +462,7 @@ generate_report() {
         local last_commit
         last_commit=$(git -C "$dir" log -1 --format='%ci' 2>/dev/null || echo "unknown")
         local branch_count
-        branch_count=$(git -C "$dir" branch -a 2>/dev/null | wc -l)
+        branch_count=$(git -C "$dir" branch -a 2>/dev/null | wc -l) || branch_count=0
 
         [[ "$first" == "true" ]] && first=false || repo_details+=","
         repo_details+=$(jq -nc \
@@ -426,7 +502,6 @@ generate_report() {
         }' > "$report_file"
 
     log "INFO" "Report saved: ${report_file}"
-    echo "$report_file"
 }
 
 show_status() {
@@ -438,6 +513,23 @@ show_status() {
     fi
     echo "=== Latest Backup Report ==="
     jq '.' "$latest"
+}
+
+show_help() {
+    echo "ForkOff — GitHub Mirror Backup"
+    echo ""
+    echo "Usage: github-backup [OPTION]"
+    echo ""
+    echo "Options:"
+    echo "  (none)           Run backup"
+    echo "  --status         Show last backup report"
+    echo "  --verify         Verify all mirror integrity"
+    echo "  --test-restore   Clone a random mirror and verify HEAD"
+    echo "  --test-notify    Send test notification to all channels"
+    echo "  --help, -h       Show this help"
+    echo ""
+    echo "Configuration: ${CONFIG_FILE}"
+    echo "Override with: GITHUB_BACKUP_CONF=/path/to/alt.conf github-backup"
 }
 
 verify_all() {
@@ -467,6 +559,9 @@ case "${1:-}" in
     --status)       show_status; exit 0 ;;
     --verify)       verify_all; exit 0 ;;
     --test-restore) test_restore; exit $? ;;
+    --test-notify)  test_notify; exit 0 ;;
+    --help|-h)      show_help; exit 0 ;;
+    --*)            echo "Unknown option: $1"; echo "Run: github-backup --help"; exit 1 ;;
 esac
 
 # Pre-flight
@@ -482,28 +577,45 @@ if [[ "$BACKUP_METADATA" == "true" ]]; then
     chmod 700 "${BACKUP_DIR}/../metadata"
 fi
 
+# Log file for this run (UTC timestamp for consistency)
+LOG_FILE="${LOG_DIR}/backup-$(date -u '+%Y%m%d-%H%M%SZ').log"
+
 # Disk space pre-check
 MIN_FREE_KB=$(( MIN_FREE_MB * 1024 ))
 AVAIL_KB=$(df -Pk "$BACKUP_DIR" 2>/dev/null | awk 'NR==2 {print $4}')
 if [[ -n "$AVAIL_KB" && "$AVAIL_KB" -lt "$MIN_FREE_KB" ]]; then
-    # LOG_FILE not yet set — write directly
-    LOG_FILE="${LOG_DIR}/backup-$(date '+%Y%m%d-%H%M%S').log"
     log "ERROR" "Low disk space on ${BACKUP_DIR}: $(( AVAIL_KB / 1024 )) MB free (need >= ${MIN_FREE_MB} MB)"
     notify "FAILURE" 0 0 0 "disk-space-abort" \
         "Backup aborted — low disk space: $(( AVAIL_KB / 1024 )) MB free (need >= ${MIN_FREE_MB} MB)"
     exit 1
 fi
 
-# Log file for this run
-LOG_FILE="${LOG_DIR}/backup-$(date '+%Y%m%d-%H%M%S').log"
-
 # Lock directory (atomic via mkdir — prevents race conditions and symlink attacks)
+# PID recorded inside for stale lock detection
 LOCK_DIR="${BACKUP_DIR}/.backup.lock"
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-    echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] [ERROR] Another backup is already running (lock: $LOCK_DIR)" | tee -a "$LOG_FILE"
-    exit 1
+    # Check for stale lock
+    if [[ -f "$LOCK_DIR/pid" ]]; then
+        old_pid=$(cat "$LOCK_DIR/pid")
+        if ! kill -0 "$old_pid" 2>/dev/null; then
+            log "WARN" "Removing stale lock (PID $old_pid is gone)"
+            rm -rf "$LOCK_DIR"
+            mkdir "$LOCK_DIR" 2>/dev/null || {
+                log "ERROR" "Could not acquire lock after stale removal: $LOCK_DIR"
+                exit 1
+            }
+        else
+            log "ERROR" "Another backup is already running (PID $old_pid, lock: $LOCK_DIR)"
+            exit 1
+        fi
+    else
+        log "ERROR" "Another backup is already running (lock: $LOCK_DIR)"
+        echo "If no backup is running, remove the stale lock: rm -rf $LOCK_DIR"
+        exit 1
+    fi
 fi
-trap cleanup EXIT
+echo $$ > "$LOCK_DIR/pid"
+trap cleanup EXIT TERM INT
 
 START_TIME=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 log "INFO" "========== GitHub Backup Starting =========="
@@ -549,7 +661,8 @@ while IFS='|' read -r name clone_url private; do
         continue
     fi
 
-    if ! echo "$EXISTING_MIRRORS" | grep -qx "$name"; then
+    # Fixed-string match to avoid regex metacharacter issues in repo names
+    if ! echo "$EXISTING_MIRRORS" | grep -qxF "$name"; then
         log "INFO" "New repo discovered: ${name}"
         ((NEW_REPOS++)) || true
     fi
@@ -566,7 +679,7 @@ JOB_COUNT=${#JOB_NAMES[@]}
 log "INFO" "Jobs queued: ${JOB_COUNT} (parallel: ${MAX_PARALLEL})"
 
 # --- Execute jobs in parallel via FIFO semaphore ---
-PARALLEL_TMPDIR=$(mktemp -d)
+PARALLEL_TMPDIR=$(mktemp -d "${BACKUP_DIR}/.parallel-XXXXXX")
 chmod 700 "$PARALLEL_TMPDIR"
 FIFO="${PARALLEL_TMPDIR}/sem"
 mkfifo "$FIFO"
@@ -576,6 +689,9 @@ for ((i = 0; i < MAX_PARALLEL; i++)); do echo >&3; done
 for ((j = 0; j < JOB_COUNT; j++)); do
     read -ru 3  # acquire semaphore slot
     (
+        # Ensure semaphore token is always returned, even on crash
+        trap 'echo >&3' EXIT
+
         job_log="${PARALLEL_TMPDIR}/job-${j}.log"
         result_file="${PARALLEL_TMPDIR}/result-${j}"
 
@@ -602,8 +718,6 @@ for ((j = 0; j < JOB_COUNT; j++)); do
             meta_counts=$(export_metadata "$name" 2>>"$job_log")
             echo "META ${meta_counts}" >> "$result_file"
         fi
-
-        echo >&3  # release semaphore slot
     ) &
 done
 
@@ -629,7 +743,9 @@ for ((j = 0; j < JOB_COUNT; j++)); do
             ((SUCCEEDED++)) || true
         else
             ((FAILED++)) || true
-            FAILED_LIST+=" ${first_line#FAIL }"
+            # Trim leading space from accumulated list
+            local_name="${first_line#FAIL }"
+            FAILED_LIST="${FAILED_LIST:+${FAILED_LIST}, }${local_name}"
         fi
         # Aggregate metadata counts
         meta_line=$(grep "^META " "$result_file" 2>/dev/null || true)
@@ -642,7 +758,7 @@ for ((j = 0; j < JOB_COUNT; j++)); do
     else
         # No result file = something went very wrong in the subshell
         ((FAILED++)) || true
-        FAILED_LIST+=" ${JOB_NAMES[$j]}"
+        FAILED_LIST="${FAILED_LIST:+${FAILED_LIST}, }${JOB_NAMES[$j]}"
     fi
 done
 
@@ -675,18 +791,19 @@ if [[ "$RESTORE_TEST" == "true" ]]; then
     fi
 fi
 
-# Rotate old logs
+# Rotate old logs (UTC filenames)
 find "$LOG_DIR" -name "backup-*.log" -mtime +"${MAX_LOG_DAYS}" -delete 2>/dev/null
 find "$REPORT_DIR" -name "backup-report-*.json" -mtime +"${MAX_LOG_DAYS}" -delete 2>/dev/null
 
 # Summary
-log "INFO" "========== Backup Complete =========="
+ELAPSED=$(( $(date +%s) - $(date -d "$START_TIME" +%s 2>/dev/null || echo 0) ))
+log "INFO" "========== Backup Complete (${ELAPSED}s) =========="
 log "INFO" "Total: ${TOTAL} | Success: ${SUCCEEDED} | Failed: ${FAILED} | Skipped: ${SKIPPED} | New: ${NEW_REPOS}"
 
 if [[ -n "$FAILED_LIST" ]]; then
-    log "ERROR" "Failed repos:${FAILED_LIST}"
+    log "ERROR" "Failed repos: ${FAILED_LIST}"
     notify "PARTIAL_FAILURE" "$TOTAL" "$SUCCEEDED" "$FAILED" "$FAILED_LIST" \
-        "Backup completed with failures. Failed:${FAILED_LIST} (${SUCCEEDED}/${TOTAL} succeeded)"
+        "Backup completed with failures. Failed: ${FAILED_LIST} (${SUCCEEDED}/${TOTAL} succeeded)"
 else
     notify "SUCCESS" "$TOTAL" "$SUCCEEDED" "$FAILED" "" \
         "Backup complete. ${SUCCEEDED}/${TOTAL} repos mirrored successfully."
