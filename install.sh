@@ -12,7 +12,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SYSTEMD_DIR="/etc/systemd/system"
 CONFIG_DIR="/etc/github-backup"
-TOKEN_DIR="${SYSTEMD_DIR}/github-backup.service.d"
+CREDSTORE_DIR="/etc/credstore"
 
 # --- Helper Functions --------------------------------------------------------
 
@@ -47,6 +47,20 @@ prompt_bool() {
     else
         printf -v "$varname" '%s' "false"
     fi
+}
+
+# Authenticate curl without exposing the token in process args.
+# Writes a curl config file with the auth header and passes it via -K.
+gh_curl() {
+    local token="$1"; shift
+    local curl_cfg
+    curl_cfg=$(mktemp)
+    chmod 600 "$curl_cfg"
+    printf -- '--header "Authorization: token %s"\n' "$token" > "$curl_cfg"
+    curl -K "$curl_cfg" "$@"
+    local rc=$?
+    rm -f "$curl_cfg"
+    return $rc
 }
 
 # --- TUI Repo Selector -------------------------------------------------------
@@ -216,9 +230,9 @@ if [[ -f "${CONFIG_DIR}/github-backup.conf" ]]; then
         EXISTING_SCHEDULE=$(grep -oP 'OnCalendar=\*-\*-\* \K[0-9]{2}:[0-9]{2}' "${SYSTEMD_DIR}/github-backup.timer" 2>/dev/null || echo "03:00")
     fi
     # Read existing token
-    if [[ -f "${TOKEN_DIR}/token.env" ]]; then
-        # Extract token value without sourcing (avoids code execution risk)
-        EXISTING_TOKEN=$(grep '^GITHUB_TOKEN=' "${TOKEN_DIR}/token.env" 2>/dev/null | cut -d= -f2-)
+    if [[ -f "${CREDSTORE_DIR}/github-backup.github-token" ]]; then
+        EXISTING_TOKEN=$(systemd-creds decrypt --name=github-token \
+            "${CREDSTORE_DIR}/github-backup.github-token" - 2>/dev/null || echo "")
     fi
     # Clear sourced vars so they don't leak into prompts
     unset GITHUB_USER BACKUP_DIR LOG_DIR REPORT_DIR MAX_LOG_DAYS EXCLUDE_REPOS GITHUB_TOKEN \
@@ -272,8 +286,7 @@ echo ""
 
 # --- Test the token ---
 echo "Testing token against GitHub API..."
-TEST_RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
-    -H "Authorization: token ${GITHUB_TOKEN}" \
+TEST_RESPONSE=$(gh_curl "$GITHUB_TOKEN" -s -o /dev/null -w "%{http_code}" \
     "https://api.github.com/user") || true
 
 if [[ "$TEST_RESPONSE" != "200" ]]; then
@@ -287,16 +300,14 @@ if [[ "$TEST_RESPONSE" != "200" ]]; then
     exit 1
 fi
 
-VERIFIED_USER=$(curl -sf \
-    -H "Authorization: token ${GITHUB_TOKEN}" \
+VERIFIED_USER=$(gh_curl "$GITHUB_TOKEN" -sf \
     "https://api.github.com/user" | jq -r '.login')
 echo "  Authenticated as: ${VERIFIED_USER}"
 echo ""
 
 # --- Fetch repos and show selector ---
 echo "Fetching repository list..."
-ALL_REPO_DATA=$(curl -sf \
-    -H "Authorization: token ${GITHUB_TOKEN}" \
+ALL_REPO_DATA=$(gh_curl "$GITHUB_TOKEN" -sf \
     -H "Accept: application/vnd.github.v3+json" \
     "https://api.github.com/user/repos?per_page=100&page=1&affiliation=owner" 2>/dev/null) || {
     echo "ERROR: Failed to fetch repos from GitHub API."
@@ -306,8 +317,7 @@ ALL_REPO_DATA=$(curl -sf \
 # Handle pagination
 PAGE=2
 while true; do
-    NEXT_PAGE=$(curl -sf \
-        -H "Authorization: token ${GITHUB_TOKEN}" \
+    NEXT_PAGE=$(gh_curl "$GITHUB_TOKEN" -sf \
         -H "Accept: application/vnd.github.v3+json" \
         "https://api.github.com/user/repos?per_page=100&page=${PAGE}&affiliation=owner" 2>/dev/null) || break
     NEXT_COUNT=$(echo "$NEXT_PAGE" | jq 'length')
@@ -524,10 +534,12 @@ cp "${SCRIPT_DIR}/github-backup.sh" "$INSTALL_PATH"
 chmod 755 "$INSTALL_PATH"
 
 echo "[4/7] Storing token..."
-mkdir -p "$TOKEN_DIR"
-echo "GITHUB_TOKEN=${GITHUB_TOKEN}" > "${TOKEN_DIR}/token.env"
-chmod 600 "${TOKEN_DIR}/token.env"
-chown root:root "${TOKEN_DIR}/token.env"
+mkdir -p "$CREDSTORE_DIR"
+chmod 700 "$CREDSTORE_DIR"
+echo -n "$GITHUB_TOKEN" | systemd-creds encrypt --name=github-token \
+    - "${CREDSTORE_DIR}/github-backup.github-token"
+chmod 600 "${CREDSTORE_DIR}/github-backup.github-token"
+chown root:root "${CREDSTORE_DIR}/github-backup.github-token"
 
 echo "[5/7] Installing systemd units..."
 sed "s|@@INSTALL_PATH@@|${INSTALL_PATH}|g" \
