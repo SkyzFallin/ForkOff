@@ -96,7 +96,7 @@ Press enter at any prompt to accept the default value.
 
 ## Configuration
 
-After installation, edit `/etc/github-backup/github-backup.conf` to change settings:
+To change any setting, just run the installer again — it will detect the existing installation and let you update your config. You can also edit the config file directly:
 
 ```ini
 GITHUB_USER="your-username"
