@@ -1,0 +1,31 @@
+# =============================================================================
+# ForkOff — Configuration
+# =============================================================================
+# Installed to: /etc/github-backup/github-backup.conf
+# Do not put secrets here — the GitHub PAT is loaded via systemd EnvironmentFile.
+
+# GitHub username (owner whose repos to back up)
+GITHUB_USER="your-github-username"
+
+# Base directory for bare git mirrors
+BACKUP_DIR="/opt/github-backups/mirrors"
+
+# Log directory (per-run logs)
+LOG_DIR="/opt/github-backups/logs"
+
+# JSON audit report directory
+REPORT_DIR="/opt/github-backups/reports"
+
+# Lock file (prevents overlapping runs)
+LOCK_FILE="/tmp/github-backup.lock"
+
+# Days to keep logs and reports before auto-pruning
+MAX_LOG_DAYS=90
+
+# Desktop error notification file (leave empty to disable)
+# If set, a file is created/appended here when backup errors occur.
+# Useful if you RDP/VNC into the box and want a visible flag on the desktop.
+ERROR_FILE=""
+
+# Space-separated list of repo names to skip (e.g. forks you don't own)
+EXCLUDE_REPOS=""

@@ -1,0 +1,10 @@
+[Unit]
+Description=ForkOff — Backup Timer
+
+[Timer]
+OnCalendar=@@SCHEDULE@@
+Persistent=true
+RandomizedDelaySec=900
+
+[Install]
+WantedBy=timers.target
