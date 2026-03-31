@@ -34,6 +34,21 @@ prompt_default() {
     printf -v "$varname" '%s' "${input:-$default}"
 }
 
+prompt_bool() {
+    local prompt="$1"
+    local default="$2"
+    local varname="$3"
+    local input
+    read -rp "${prompt} (true/false) [${default}]: " input
+    local val="${input:-$default}"
+    # Normalize to true/false
+    if [[ "$val" == "true" || "$val" == "yes" || "$val" == "y" ]]; then
+        printf -v "$varname" '%s' "true"
+    else
+        printf -v "$varname" '%s' "false"
+    fi
+}
+
 # --- TUI Repo Selector -------------------------------------------------------
 # Pure bash interactive checkbox list. Arrow keys navigate, space toggles,
 # enter confirms. Returns space-separated list of selected (excluded) repos.
@@ -163,9 +178,16 @@ fi
 RECONFIG=false
 EXISTING_USER=""
 EXISTING_BACKUP_BASE=""
-EXISTING_ERROR_FILE=""
 EXISTING_EXCLUDE=""
 EXISTING_SCHEDULE=""
+EXISTING_WEBHOOK_URL=""
+EXISTING_WEBHOOK_ON_SUCCESS="false"
+EXISTING_NTFY_TOPIC=""
+EXISTING_HEALTHCHECK_URL=""
+EXISTING_BACKUP_METADATA="false"
+EXISTING_MAX_PARALLEL="4"
+EXISTING_MIN_FREE_MB="1024"
+EXISTING_RESTORE_TEST="false"
 
 if [[ -f "${CONFIG_DIR}/github-backup.conf" ]]; then
     RECONFIG=true
@@ -174,8 +196,15 @@ if [[ -f "${CONFIG_DIR}/github-backup.conf" ]]; then
     EXISTING_USER="$GITHUB_USER"
     # Derive base from mirrors path (strip /mirrors suffix)
     EXISTING_BACKUP_BASE="${BACKUP_DIR%/mirrors}"
-    EXISTING_ERROR_FILE="${ERROR_FILE:-}"
     EXISTING_EXCLUDE="${EXCLUDE_REPOS:-}"
+    EXISTING_WEBHOOK_URL="${WEBHOOK_URL:-}"
+    EXISTING_WEBHOOK_ON_SUCCESS="${WEBHOOK_ON_SUCCESS:-false}"
+    EXISTING_NTFY_TOPIC="${NTFY_TOPIC:-}"
+    EXISTING_HEALTHCHECK_URL="${HEALTHCHECK_URL:-}"
+    EXISTING_BACKUP_METADATA="${BACKUP_METADATA:-false}"
+    EXISTING_MAX_PARALLEL="${MAX_PARALLEL:-4}"
+    EXISTING_MIN_FREE_MB="${MIN_FREE_MB:-1024}"
+    EXISTING_RESTORE_TEST="${RESTORE_TEST:-false}"
     # Read schedule from existing timer
     if [[ -f "${SYSTEMD_DIR}/github-backup.timer" ]]; then
         EXISTING_SCHEDULE=$(grep -oP 'OnCalendar=\*-\*-\* \K[0-9]{2}:[0-9]{2}' "${SYSTEMD_DIR}/github-backup.timer" 2>/dev/null || echo "03:00")
@@ -187,7 +216,9 @@ if [[ -f "${CONFIG_DIR}/github-backup.conf" ]]; then
         EXISTING_TOKEN="${GITHUB_TOKEN:-}"
     fi
     # Clear sourced vars so they don't leak into prompts
-    unset GITHUB_USER BACKUP_DIR LOG_DIR REPORT_DIR MAX_LOG_DAYS ERROR_FILE EXCLUDE_REPOS GITHUB_TOKEN
+    unset GITHUB_USER BACKUP_DIR LOG_DIR REPORT_DIR MAX_LOG_DAYS EXCLUDE_REPOS GITHUB_TOKEN \
+        WEBHOOK_URL WEBHOOK_ON_SUCCESS NTFY_TOPIC HEALTHCHECK_URL BACKUP_METADATA \
+        MAX_PARALLEL MIN_FREE_MB RESTORE_TEST ERROR_FILE
 
     echo "  Existing installation detected — entering reconfigure mode."
     echo "  Press enter at any prompt to keep the current value."
@@ -351,48 +382,52 @@ LOG_DIR="${BACKUP_BASE}/logs"
 REPORT_DIR="${BACKUP_BASE}/reports"
 echo ""
 
-# --- Prompt for desktop error file (optional) ---
-# Detect the real user's home (not root) for a sensible default
-REAL_USER="${SUDO_USER:-$USER}"
-REAL_HOME=$(getent passwd "$REAL_USER" 2>/dev/null | cut -d: -f6)
-REAL_HOME="${REAL_HOME:-$HOME}"
-if [[ "$RECONFIG" == true && -n "$EXISTING_ERROR_FILE" ]]; then
-    DEFAULT_ERROR_FILE="$EXISTING_ERROR_FILE"
-elif [[ -d "${REAL_HOME}/Desktop" ]]; then
-    DEFAULT_ERROR_FILE="${REAL_HOME}/Desktop/BACKUP_ERROR.txt"
-else
-    DEFAULT_ERROR_FILE=""
-fi
+# --- Prompt for notifications ---
+echo "--- Notifications ---"
+echo ""
 
-echo "Desktop error notification"
-echo "  Drops a file on your desktop when backup errors occur."
+echo "Webhook (POST JSON on failure — Discord, Slack, Make, Zapier, etc.)"
+prompt_default "  Webhook URL (empty to disable)" "${EXISTING_WEBHOOK_URL:-}" WEBHOOK_URL
+if [[ -n "$WEBHOOK_URL" ]]; then
+    prompt_bool "  Also send webhook on success?" "$EXISTING_WEBHOOK_ON_SUCCESS" WEBHOOK_ON_SUCCESS
+else
+    WEBHOOK_ON_SUCCESS="false"
+fi
 echo ""
-echo "  1) ${DEFAULT_ERROR_FILE:-[no desktop detected]}"
-echo "  2) Custom path"
-echo "  3) Disabled"
+
+echo "ntfy.sh push notifications"
+prompt_default "  ntfy topic URL (empty to disable)" "${EXISTING_NTFY_TOPIC:-}" NTFY_TOPIC
 echo ""
-read -rp "  Choose [1]: " ERROR_CHOICE
-ERROR_CHOICE="${ERROR_CHOICE:-1}"
-case "$ERROR_CHOICE" in
-    1)
-        if [[ -n "$DEFAULT_ERROR_FILE" ]]; then
-            ERROR_FILE="$DEFAULT_ERROR_FILE"
-        else
-            echo "  No desktop directory found. Enter a custom path:"
-            read -rp "  Path: " ERROR_FILE
-        fi
-        ;;
-    2)
-        read -rp "  Enter path: " ERROR_FILE
-        ;;
-    3)
-        ERROR_FILE=""
-        ;;
-    *)
-        echo "  Invalid choice, disabling."
-        ERROR_FILE=""
-        ;;
-esac
+
+echo "Healthcheck (dead-man's-switch — Healthchecks.io, UptimeRobot, etc.)"
+prompt_default "  Healthcheck URL (empty to disable)" "${EXISTING_HEALTHCHECK_URL:-}" HEALTHCHECK_URL
+echo ""
+
+# --- Prompt for metadata export ---
+echo "--- Metadata Export ---"
+echo ""
+echo "Export GitHub issues, PRs, and releases as JSON alongside mirrors."
+if [[ "$RECONFIG" == true ]]; then
+    prompt_bool "  Enable metadata export?" "$EXISTING_BACKUP_METADATA" BACKUP_METADATA
+else
+    prompt_bool "  Enable metadata export?" "false" BACKUP_METADATA
+fi
+if [[ "$BACKUP_METADATA" == "true" ]]; then
+    if ! command -v gh &>/dev/null; then
+        echo "  WARNING: gh CLI not found. Install it before running backups."
+        echo "           https://cli.github.com/"
+    else
+        echo "  gh CLI: OK"
+    fi
+fi
+echo ""
+
+# --- Prompt for performance/safety ---
+echo "--- Performance & Safety ---"
+echo ""
+prompt_default "  Max parallel jobs" "${EXISTING_MAX_PARALLEL:-4}" MAX_PARALLEL
+prompt_default "  Min free disk space (MB)" "${EXISTING_MIN_FREE_MB:-1024}" MIN_FREE_MB
+prompt_bool "  Run restore test after each backup?" "${EXISTING_RESTORE_TEST:-false}" RESTORE_TEST
 echo ""
 
 # --- Prompt for schedule ---
@@ -418,7 +453,13 @@ echo "  Backup dir:      ${BACKUP_BASE}/"
 echo "  Install path:    ${INSTALL_PATH}"
 echo "  Schedule:        ${SCHEDULE} UTC (+ up to 15min jitter)"
 echo "  Excluded repos:  ${EXCLUDE_REPOS:-none}"
-echo "  Error file:      ${ERROR_FILE:-disabled}"
+echo "  Webhook:         ${WEBHOOK_URL:-disabled}"
+echo "  ntfy topic:      ${NTFY_TOPIC:-disabled}"
+echo "  Healthcheck:     ${HEALTHCHECK_URL:-disabled}"
+echo "  Metadata export: ${BACKUP_METADATA}"
+echo "  Parallel jobs:   ${MAX_PARALLEL}"
+echo "  Min free space:  ${MIN_FREE_MB} MB"
+echo "  Restore test:    ${RESTORE_TEST}"
 echo ""
 read -rp "Proceed with installation? (y/N): " CONFIRM
 [[ "$CONFIRM" =~ ^[Yy] ]] || { echo "Aborted."; exit 0; }
@@ -428,6 +469,11 @@ echo ""
 
 echo "[1/7] Creating directories..."
 mkdir -p "$BACKUP_DIR" "$LOG_DIR" "$REPORT_DIR" "$CONFIG_DIR"
+chmod 700 "$BACKUP_DIR" "$LOG_DIR" "$REPORT_DIR"
+if [[ "$BACKUP_METADATA" == "true" ]]; then
+    mkdir -p "${BACKUP_BASE}/metadata"
+    chmod 700 "${BACKUP_BASE}/metadata"
+fi
 
 echo "[2/7] Writing configuration..."
 cat > "${CONFIG_DIR}/github-backup.conf" << CONFEOF
@@ -439,8 +485,21 @@ BACKUP_DIR="${BACKUP_DIR}"
 LOG_DIR="${LOG_DIR}"
 REPORT_DIR="${REPORT_DIR}"
 MAX_LOG_DAYS=366
-ERROR_FILE="${ERROR_FILE}"
 EXCLUDE_REPOS="${EXCLUDE_REPOS}"
+
+# Notifications
+WEBHOOK_URL="${WEBHOOK_URL}"
+WEBHOOK_ON_SUCCESS="${WEBHOOK_ON_SUCCESS}"
+NTFY_TOPIC="${NTFY_TOPIC}"
+HEALTHCHECK_URL="${HEALTHCHECK_URL}"
+
+# Metadata
+BACKUP_METADATA="${BACKUP_METADATA}"
+
+# Performance & Safety
+MAX_PARALLEL="${MAX_PARALLEL}"
+MIN_FREE_MB="${MIN_FREE_MB}"
+RESTORE_TEST="${RESTORE_TEST}"
 CONFEOF
 chmod 600 "${CONFIG_DIR}/github-backup.conf"
 chown root:root "${CONFIG_DIR}/github-backup.conf"
@@ -453,6 +512,7 @@ echo "[4/7] Storing token..."
 mkdir -p "$TOKEN_DIR"
 echo "GITHUB_TOKEN=${GITHUB_TOKEN}" > "${TOKEN_DIR}/token.env"
 chmod 600 "${TOKEN_DIR}/token.env"
+chown root:root "${TOKEN_DIR}/token.env"
 
 echo "[5/7] Installing systemd units..."
 sed "s|@@INSTALL_PATH@@|${INSTALL_PATH}|g" \
@@ -470,15 +530,9 @@ if [[ "$RECONFIG" == true ]]; then
     systemctl start github-backup.service
     echo "  Backup complete."
 else
-    echo "[7/7] Running initial backup (two passes)..."
-    echo ""
-    echo "  Pass 1: Cloning all mirrors..."
+    echo "[7/7] Running initial backup..."
     systemctl start github-backup.service
-    echo "  Pass 1 complete."
-    echo ""
-    echo "  Pass 2: Updating private repos (re-authenticates stored mirrors)..."
-    systemctl start github-backup.service
-    echo "  Pass 2 complete."
+    echo "  Initial backup complete."
 fi
 echo ""
 
@@ -503,8 +557,9 @@ echo "    Watch logs:       sudo journalctl -u github-backup -f"
 echo "    Check timer:      systemctl list-timers github-backup.timer"
 echo "    Backup status:    sudo github-backup --status"
 echo "    Verify mirrors:   sudo github-backup --verify"
+echo "    Restore test:     sudo github-backup --test-restore"
 echo ""
-echo "  To change excluded repos or other settings:"
+echo "  To change settings, run the installer again or edit:"
 echo "    sudo nano ${CONFIG_DIR}/github-backup.conf"
 echo ""
 echo "  Audit trail:"
