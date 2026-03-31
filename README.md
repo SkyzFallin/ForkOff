@@ -10,7 +10,9 @@
 
 By [SkyzFallin](https://github.com/SkyzFallin) | [GitHub Repo](https://github.com/SkyzFallin/ForkOff)
 
-Automated daily mirror backup of all your GitHub repositories. If your account gets banned, GitHub goes down, or you just want a local copy of everything — ForkOff has your back.
+Automated daily mirror backup of all your GitHub repositories.
+
+Under GitHub's [Terms of Service](https://docs.github.com/en/site-policy/github-terms/github-terms-of-service), they hold a broad license to your content and can suspend or terminate your account at any time, for any reason, with or without notice. If that happens, every repo, commit, branch, and tag you've ever pushed is gone — unless you have an independent backup. ForkOff runs daily, keeps a full mirror of everything, and produces timestamped audit logs so you can prove it.
 
 ## Features
 
@@ -18,10 +20,10 @@ Automated daily mirror backup of all your GitHub repositories. If your account g
 - New repos picked up automatically — no manual config needed
 - `git clone --mirror` for full history, branches, tags, and refs
 - Interactive installer with TUI repo selector to exclude forks or repos you don't want
-- JSON audit reports per run (timestamps, pass/fail, repo count, sizes)
+- JSON audit reports per run (timestamps, pass/fail, repo count, sizes) — proof of backup for SLAs, compliance, and audits
 - Integrity spot-checks via `git fsck` on random mirrors each run
+- Timestamped logs retained for 90 days — verifiable backup history on demand
 - Optional desktop error notification file for visible alerting
-- 90-day log/report retention with auto-cleanup
 - Runs as a systemd timer — set it and forget it
 
 ## Quick Start
