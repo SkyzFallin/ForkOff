@@ -68,9 +68,9 @@ Press enter at any prompt to accept the default value.
 ```
 /opt/github-backups/           # (or your chosen path)
 ├── mirrors/                   # Bare git mirrors (RepoName.git/)
-├── logs/                      # Per-run logs (90-day retention)
+├── logs/                      # Per-run logs (366-day retention)
 │   └── backup-YYYYMMDD-HHMMSS.log
-└── reports/                   # JSON audit reports (90-day retention)
+└── reports/                   # JSON audit reports (366-day retention)
     └── backup-report-YYYYMMDD.json
 
 /etc/github-backup/
@@ -156,20 +156,19 @@ sudo chmod 600 /etc/systemd/system/github-backup.service.d/token.env
 sudo systemctl daemon-reload
 ```
 
+## No Versioned Snapshots
+
+ForkOff keeps one mirror per repo — each daily run updates it in place. It does not create dated snapshot copies or maintain a history of what your repos looked like on previous days. If you delete a branch on GitHub, the mirror will reflect that deletion on the next run. If you need point-in-time snapshots (e.g. "what did this repo look like 30 days ago"), you would need to script that yourself — something like copying the mirror directory to a dated folder before each run.
+
+ForkOff's purpose is simpler: get your code off GitHub and onto a disk you control. That's it.
+
 ## No Encryption at Rest
 
 Backed-up mirrors are stored in cleartext as plain git repos on disk — there is no encryption at rest. This is intentional — encryption isn't part of this project and won't be. It's meant to be simple and stay simple. If you have private repos with secrets or sensitive files you don't want exposed, it's your responsibility to secure them. Use full-disk encryption on the backup volume, or encrypt sensitive files before they ever hit your repo.
 
-## What Does NOT Get Backed Up
+## What It Doesn't Cover
 
-Git mirrors cover all code, branches, tags, and history. These GitHub-only items require a separate export:
-
-- Issues, Pull Requests, Discussions
-- GitHub Actions run history
-- Releases (binary assets)
-- Repo settings, webhooks, deploy keys
-
-GitHub's built-in account export covers these: **Settings > Archives > Export account data**.
+Git mirrors are comprehensive for code — full history, every branch, every tag. But there are GitHub-specific artifacts that live outside the repository itself: issues, pull requests, discussions, Actions run history, release binaries, webhooks, and deploy keys. For those, GitHub's built-in account export (Settings → Archives → Export account data) fills the gap. ForkOff handles the part that matters most — your code and its complete version history.
 
 ## Uninstall
 
