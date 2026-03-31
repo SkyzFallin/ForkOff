@@ -66,7 +66,8 @@ RESTORE_TEST="${RESTORE_TEST:-false}"
 
 # Validate numeric config values
 [[ "$MAX_PARALLEL" =~ ^[1-9][0-9]*$ ]] || MAX_PARALLEL=4
-[[ "$MIN_FREE_MB" =~ ^[0-9]+$ ]] || MIN_FREE_MB=1024
+[[ "$MIN_FREE_MB" =~ ^[0-9]+$ ]]    || MIN_FREE_MB=1024
+[[ "$MAX_LOG_DAYS" =~ ^[1-9][0-9]*$ ]] || MAX_LOG_DAYS=366
 
 # Git network timeouts — prevent hung clones from blocking semaphore slots
 export GIT_HTTP_LOW_SPEED_LIMIT=1000   # bytes/sec
@@ -192,13 +193,17 @@ check_dependencies() {
 }
 
 setup_git_askpass() {
+    local token="$1"
     # Create a temporary script that prints the token for git authentication.
     # This avoids embedding the token in clone/fetch URLs where it would be
     # visible in /proc/*/cmdline to other local users.
     # Created under BACKUP_DIR (mode 700) rather than /tmp for defense in depth.
     GIT_ASKPASS_SCRIPT=$(mktemp "${BACKUP_DIR}/.git-askpass-XXXXXX")
     chmod 700 "$GIT_ASKPASS_SCRIPT"
-    printf '#!/usr/bin/env bash\necho "${GITHUB_TOKEN}"\n' > "$GIT_ASKPASS_SCRIPT"
+    printf '#!/usr/bin/env bash\necho %q\n' "$token" > "$GIT_ASKPASS_SCRIPT" || {
+        echo "ERROR: Failed to write git askpass script" >&2
+        exit 1
+    }
     export GIT_ASKPASS="$GIT_ASKPASS_SCRIPT"
     export GIT_TERMINAL_PROMPT=0
 }
@@ -208,12 +213,16 @@ cleanup_git_askpass() {
 }
 
 get_token() {
-    if [[ -z "${GITHUB_TOKEN:-}" ]]; then
-        log "ERROR" "GITHUB_TOKEN environment variable is not set."
-        log "ERROR" "Set it with: export GITHUB_TOKEN=ghp_... or ensure the systemd EnvironmentFile is configured."
+    local cred_file="${CREDENTIALS_DIRECTORY:-}/github-token"
+    if [[ -n "${CREDENTIALS_DIRECTORY:-}" && -f "$cred_file" ]]; then
+        cat "$cred_file"
+    elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
+        echo "$GITHUB_TOKEN"
+    else
+        log "ERROR" "No GitHub token found."
+        log "ERROR" "Expected systemd credential 'github-token' or GITHUB_TOKEN env var."
         exit 1
     fi
-    echo "$GITHUB_TOKEN"
 }
 
 # Authenticate curl to the GitHub API without exposing the token in process args.
@@ -262,7 +271,7 @@ fetch_all_repos() {
             local reset_epoch
             reset_epoch=$(grep -i '^x-ratelimit-reset:' "$header_file" | tr -d '\r' | awk '{print $2}')
             # Fallback if reset header is missing
-            [[ -n "$reset_epoch" ]] || reset_epoch=$(( $(date +%s) + 60 ))
+            [[ -n "$reset_epoch" ]] || reset_epoch=$(( $(date +%s) + 3600 ))
             local now_epoch
             now_epoch=$(date +%s)
             local wait_secs=$(( reset_epoch - now_epoch + 2 ))
@@ -626,7 +635,7 @@ log "INFO" "Backup dir: ${BACKUP_DIR}"
 TOKEN=$(get_token)
 
 # Set up GIT_ASKPASS so tokens never appear in process arguments
-setup_git_askpass
+setup_git_askpass "$TOKEN"
 
 # Discover repos
 log "INFO" "Fetching repo list from GitHub API..."
@@ -682,7 +691,10 @@ log "INFO" "Jobs queued: ${JOB_COUNT} (parallel: ${MAX_PARALLEL})"
 PARALLEL_TMPDIR=$(mktemp -d "${BACKUP_DIR}/.parallel-XXXXXX")
 chmod 700 "$PARALLEL_TMPDIR"
 FIFO="${PARALLEL_TMPDIR}/sem"
-mkfifo "$FIFO"
+mkfifo "$FIFO" || {
+    log "ERROR" "Failed to create semaphore FIFO: ${FIFO}"
+    exit 1
+}
 exec 3<>"$FIFO"
 for ((i = 0; i < MAX_PARALLEL; i++)); do echo >&3; done
 
