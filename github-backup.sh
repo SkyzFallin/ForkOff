@@ -7,7 +7,7 @@
 # https://github.com/SkyzFallin/ForkOff
 #
 # Configuration: /etc/github-backup/github-backup.conf
-# Token: loaded via systemd EnvironmentFile (GITHUB_TOKEN env var)
+# Token: loaded via systemd LoadCredential (falls back to GITHUB_TOKEN env var)
 #
 # Usage:
 #   github-backup                # Run backup
