@@ -136,7 +136,9 @@ notify() {
 
 cleanup() {
     cleanup_git_askpass
-    [[ -n "${PARALLEL_TMPDIR:-}" ]] && rm -rf "$PARALLEL_TMPDIR" 2>/dev/null || true
+    if [[ -n "${PARALLEL_TMPDIR:-}" ]]; then
+        rm -rf "$PARALLEL_TMPDIR" 2>/dev/null || true
+    fi
     rmdir "$LOCK_DIR" 2>/dev/null || true
 }
 
@@ -367,7 +369,8 @@ generate_report() {
     local end_time
     end_time=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 
-    local report_file="${REPORT_DIR}/backup-report-$(date '+%Y%m%d-%H%M%S').json"
+    local report_file
+    report_file="${REPORT_DIR}/backup-report-$(date '+%Y%m%d-%H%M%S').json"
 
     local total_size
     total_size=$(du -sh "$BACKUP_DIR" 2>/dev/null | cut -f1)
@@ -571,7 +574,7 @@ exec 3<>"$FIFO"
 for ((i = 0; i < MAX_PARALLEL; i++)); do echo >&3; done
 
 for ((j = 0; j < JOB_COUNT; j++)); do
-    read -u 3  # acquire semaphore slot
+    read -ru 3  # acquire semaphore slot
     (
         job_log="${PARALLEL_TMPDIR}/job-${j}.log"
         result_file="${PARALLEL_TMPDIR}/result-${j}"
@@ -655,7 +658,7 @@ for dir in $(find "$BACKUP_DIR" -maxdepth 1 -name '*.git' -type d 2>/dev/null | 
 done
 
 # Generate report
-REPORT_FILE=$(generate_report "$START_TIME" "$TOTAL" "$SUCCEEDED" "$FAILED" "$NEW_REPOS")
+generate_report "$START_TIME" "$TOTAL" "$SUCCEEDED" "$FAILED" "$NEW_REPOS"
 
 # Metadata summary
 if [[ "$BACKUP_METADATA" == "true" ]]; then
@@ -673,8 +676,8 @@ if [[ "$RESTORE_TEST" == "true" ]]; then
 fi
 
 # Rotate old logs
-find "$LOG_DIR" -name "backup-*.log" -mtime +${MAX_LOG_DAYS} -delete 2>/dev/null
-find "$REPORT_DIR" -name "backup-report-*.json" -mtime +${MAX_LOG_DAYS} -delete 2>/dev/null
+find "$LOG_DIR" -name "backup-*.log" -mtime +"${MAX_LOG_DAYS}" -delete 2>/dev/null
+find "$REPORT_DIR" -name "backup-report-*.json" -mtime +"${MAX_LOG_DAYS}" -delete 2>/dev/null
 
 # Summary
 log "INFO" "========== Backup Complete =========="
