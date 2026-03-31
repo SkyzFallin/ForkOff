@@ -158,9 +158,11 @@ sudo systemctl daemon-reload
 
 ## No Versioned Snapshots
 
-ForkOff keeps one mirror per repo — each daily run updates it in place. It does not create dated snapshot copies or maintain a history of what your repos looked like on previous days. If you delete a branch on GitHub, the mirror will reflect that deletion on the next run. If you need point-in-time snapshots (e.g. "what did this repo look like 30 days ago"), you would need to script that yourself — something like copying the mirror directory to a dated folder before each run.
+ForkOff keeps one mirror per repo — each daily run updates it in place. It does not create dated snapshot copies or maintain a history of what your repos looked like on previous days. If you delete a branch on GitHub, the mirror will reflect that deletion on the next run. Same goes for corruption — if something upstream gets mangled, the next sync will overwrite the good copy you had.
 
-ForkOff's purpose is simpler: get your code off GitHub and onto a disk you control. That's it.
+If you want rolling snapshots or incremental backup history, tools like [restic](https://restic.net/) or [rsnapshot](https://rsnapshot.org/) can sit on top of the mirror directory and handle that layer.
+
+ForkOff's job is simpler: get your code off GitHub and onto a disk you control. Nothing more.
 
 ## No Encryption at Rest
 
